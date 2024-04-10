@@ -37,7 +37,8 @@ lemmings_csv <- "ASDN_Daily_pred_lemm.csv"
 Read the nest data in
 
 ```{r}
-nests_data <- read_csv(file.path(path_raw, nests_csv))
+nests_data <- read_csv(file.path(path_raw, nests_csv), 
+                       show_col_types = FALSE)
 
 glimpse(nests_data)
 ```
@@ -46,7 +47,14 @@ Yeah! `Date_found` is already in date format! We can thus directly aggregate the
 
 
 ```{r}
-
+# we want the number of nests 
+nests_month <- nests_data %>% 
+  mutate(month = lubridate::month(Date_found)) %>% 
+  group_by(Species, Site, Year, month) %>% 
+  # no nests = no. rows for each group
+  summarise(n_nests = n())
+  
+nests_month
 ```
 
 ### Summarize the snow cover table
@@ -54,7 +62,8 @@ Yeah! `Date_found` is already in date format! We can thus directly aggregate the
 Read the snow cover data in
 
 ```{r}
-snowcover_data <- read_csv(file.path(path_raw, snowcover_csv))
+snowcover_data <- read_csv(file.path(path_raw, snowcover_csv),
+                           show_col_types = FALSE)
 
 glimpse(snowcover_data)
 ```
@@ -62,20 +71,51 @@ glimpse(snowcover_data)
 The Date is stored as a character we thus first we need to transform the date in date format before computing the monthly aggregate:
 
 ```{r}
-snowcover_data_fixed <- 
+snowcover_data_fixed <- snowcover_data %>% 
+  # this gives us a warning that 72 rows could not have this function work properly
+  # we need to investigate
+  # if it fails, it goes to NA
+  mutate(Date2 = lubridate::as_date(Date))
 ```
 
 We have 72 errors. Let's have a look at the date which failed:
 
 ```{r}
-
+# peeping we see Date "8&9 june 06"
+snowcover_data_fixed %>% 
+  filter(is.na(Date2))
 ```
 
 
 It is because 2 days were entered as one value `8&9 june 06`, it is not in the expected format
 
 ```{r}
+# this overwrites the NA values in the Date2 column to match what they should have been when running originally, if they'd been cleaned properly
+snowcover_data_fixed <-snowcover_data_fixed %>% 
+  mutate(Date2 = case_when(
+    Date == "8&9 june 06" ~ "09-June-06",
+    .default = Date
+  )) %>% 
+  mutate(Date2 = as_date(Date, format = "%d-%b-%y"))
+# peeping we see Date "8&9 june 06"
 
+
+snowcover_data_fixed %>% 
+  filter(is.na(Date2))
+
+snowcover_data_fixed
+```
+
+
+```{r}
+snowcover_data_fixed <-snowcover_data_fixed %>% 
+  mutate(Date = case_when(
+    Date == "8&9 june 06" ~ "09-June-06",
+    .default = Date
+  )) %>% 
+  mutate(Date2 = as_date(Date, format = "%d-%b-%y"))
+
+snowcover_data_fixed
 ```
 
 Mmm the Dates are not what we were expecting... It generally means there are different date types. Let's start by fixing the problematic dates before transforming it to the date format.
@@ -93,32 +133,71 @@ You might be wondering why I started with `as_date()` instead of directly using 
 
 Now let's compute the monthly statistics
 
+cummulative snow days, mean snow cover, and group_by site, year, month
+
 ```{r}
 # adding the snow days with a threshold at 10%
+snowcover_data_fixed <- snowcover_data_fixed %>% 
+  
+  mutate(month = month(Date2)) %>% 
 
+  group_by(Site, Year, month) %>% 
+  
+  mutate(snow_days = Snow_cover > 10) %>% 
+  
+  summarize(n_snowdays = sum(snow_days, na.rm = TRUE),
+            avg_snow_cover = mean(Snow_cover, na.rm = TRUE))
+
+snowcover_data_fixed
 ```
 
  
 ### Join the snow cover and nest tables
 
 ```{r}
+combined_tables <- inner_join(nests_month, snowcover_data_fixed,
+                              join_by(Site, month, Year))
 
+combined_tables
 ```
 
 Well in the end we did not have much information by months (mainly 2 months per year focused on June and July), so let's aggregate by year instead:
 
 ```{r}
-
+combined_years <- combined_tables %>% 
+  group_by(Species, Site, Year) %>% 
+  summarize(n_snowdays = sum(n_snowdays, na.rm = TRUE),
+            avg_snow_cover = mean(avg_snow_cover, na.rm = TRUE),
+            n_nests = sum(n_nests, na.rm = TRUE)
+            )
+  
+combined_years
 ```
 
 ### Plots
 
 ```{r}
-
+ggplot(combined_years, aes(x = n_snowdays, y = n_nests, color = Species)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set3")
 ```
 
 ```{r}
+library(here)
+common_names <- read_csv(here("data", "raw", "species.csv"),
+                         show_col_types = FALSE) 
+common_names
+```
+```{r}
+species_year <- combined_years %>% 
+  left_join(common_names, join_by(Species == Code))
 
+species_year
+```
+```{r}
+ggplot(species_year, aes(x = n_snowdays, y = n_nests, color = Common_name)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set3")
 ```
 
 What do you think is the answer to our question? 
